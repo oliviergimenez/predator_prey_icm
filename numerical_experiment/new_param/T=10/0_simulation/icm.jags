@@ -1,0 +1,104 @@
+
+data{
+# predator = P, prey = V
+#-- Priors and constraints
+# Survival and recapture probabilities, as well as detection
+for (i in 1:nindP){
+   for (t in fP[i]:(n.occasions-1)){
+      phiP[i,t] <- betaP[xP[i,t],t]
+      pP[i,t] <- mean.pP # constant predator detection
+      } #t
+   } #i
+for (t in 1:(n.occasions-1)){
+	logit(betaP[1,t]) <- alpha[1] + alpha[2] * NadP[t] # intra-species DD - juvenile predator survival fn of adult predator abundance
+	betaP[2,t] <- mean.sadP # constant adult predator survival 
+} #t
+
+for (i in 1:nindV){
+   for (t in fV[i]:(n.occasions-1)){
+      phiV[i,t] <- betaV[xV[i,t],t]
+      pV[i,t] <- mean.pV  # constant prey detection
+      } #t
+   } #i
+for (t in 1:(n.occasions-1)){
+	logit(betaV[1,t]) <- alpha[3] + alpha[4] * NadP[t] # inter-species DD - juvenile prey survival fn of adult predator abundance 
+	betaV[2,t] <- mean.sadV  # constant adult prey survival -- previously mean.sjuvV was constant
+} #t
+for (t in 1:(n.occasions-1)){
+   sjuvP[t] <- betaP[1,t] # juvenile predator survival
+   sadP[t] <- betaP[2,t] # adult predator survival
+   log(fecP[t]) <- alpha[5] + alpha[6] * N1V[t] # inter-species DD - predator fecundity fn of juvenile prey abundance
+   sjuvV[t] <- betaV[1,t] # juvenile prey survival
+   sadV[t] <- betaV[2,t] # adult prey survival
+   log(fecV[t]) <- alpha[7] + alpha[8] * NadV[t] # intra-species DD - prey fecundity fn of adult prey abundance
+   }
+
+#-- Likelihoods
+# 1. Likelihood for population population count data (state-space model)
+# System process
+N1P[1] <- N1initP # init juv predator abundance
+NadP[1] <- NadinitP # init adult predator abundance
+N1V[1] <- N1initV # init juv prey abundance
+NadV[1] <- NadinitV # init adult prey abundance
+for(t in 2: n.occasions){
+	mean1P[t] <- fecP[t-1] / 2 * sjuvP[t-1] * NadP[t-1]
+	N1P[t] ~ dpois(mean1P[t])
+	NadP[t] ~ dbin(sadP[t-1], NtotP[t-1])
+	mean1V[t] <- fecV[t-1] / 2 * sjuvV[t-1] * NadV[t-1]
+	N1V[t] ~ dpois(mean1V[t])
+	NadV[t] ~ dbin(sadV[t-1], NtotV[t-1])
+}
+for(t in 1:n.occasions){
+	NtotP[t] <- NadP[t] + N1P[t] # total predator abundance
+	NtotV[t] <- NadV[t] + N1V[t] # total prey abundance
+}
+# Observation process
+for(t in 1:n.occasions){
+	countsP[t] ~ dnorm(NtotP[t], tauyP) 
+	countsV[t] ~ dnorm(NtotV[t], tauyV)
+}
+# 2. Likelihood for capture-recapture data (state-space model)
+# predator
+for (i in 1:nindP){
+   # Define latent state at first capture
+   zP[i,fP[i]] <- 1
+   mu2P[i,fP[i]] <- 1 * zP[i,fP[i]] # detection is 1 at first capture (conditional on first capture)
+   chP[i,fP[i]] ~ dbern(mu2P[i,fP[i]])
+   for (t in (fP[i]+1):n.occasions){
+      # State process
+      zP[i,t] ~ dbern(mu1P[i,t])
+      mu1P[i,t] <- phiP[i,t-1] * zP[i,t-1]
+      # Observation process
+      chP[i,t] ~ dbern(mu2P[i,t])
+      mu2P[i,t] <- pP[i,t-1] * zP[i,t]
+      } #t
+   } #i
+# prey
+for (i in 1:nindV){
+   # Define latent state at first capture
+   zV[i,fV[i]] <- 1
+   mu2V[i,fV[i]] <- 1 * zV[i,fV[i]] # detection is 1 at first capture (conditional on first capture)
+   chV[i,fV[i]] ~ dbern(mu2V[i,fV[i]])
+   for (t in (fV[i]+1):n.occasions){
+      # State process
+      zV[i,t] ~ dbern(mu1V[i,t])
+      mu1V[i,t] <- phiV[i,t-1] * zV[i,t-1]
+      # Observation process
+      chV[i,t] ~ dbern(mu2V[i,t])
+      mu2V[i,t] <- pV[i,t-1] * zV[i,t]
+      } #t
+   } #i
+# 3. Likelihood for productivity data (Poisson regression)
+# total number of nestlings counted in year t (J) is a Poisson
+# with rate = product of nb of surveyed broods (R) and productivity (f)
+for(t in 1:(n.occasions-1)){
+	JP[t] ~ dpois(rhoP[t]) # predator prod
+	JV[t] ~ dpois(rhoV[t]) # prey prod
+	rhoP[t] <- RP[t] * fecP[t]
+	rhoV[t] <- RV[t] * fecV[t]
+}
+}
+model{
+fake <- 0
+}
+

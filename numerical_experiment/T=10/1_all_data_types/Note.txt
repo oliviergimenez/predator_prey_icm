@@ -1,0 +1,1 @@
+This folder will contain more info than others, including obs error + comparison vague vs. info priors. 

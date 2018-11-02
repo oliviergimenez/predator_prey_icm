@@ -1,0 +1,421 @@
+############################################################################################
+# Two-species integrated population model
+# Combining counts, repro and capture-recapture data
+# Data simulation and model fitting in Jags
+# O. Gimenez and F. Barraquand 
+# Notes:
+#		We relied on code from Kery and Schaub book (chapter 11) initially written
+# 		for analyses that were carried out in Schaub, Gimenez, Sierro, Arlettaz (2007)
+#		Use of integrated modeling to enhance estimates of population dynamics
+# 		obtained from limited data. Conservation Biology 21: 945–955. 
+# 		We were also inspired by some code from Abadi, Gimenez, Jakobere, Stauberf, 
+#		Arlettaz, Schaub (2012). Estimating the strength of density dependence in the 
+# 		presence of observation errors using integrated population models. Ecological 
+#		Modelling 242: 1-9.
+############################################################################################
+
+# COMMENTS:
+# O. Gimenez 20/11/2017: draft code for simulations and model fitting
+# O. Gimenez 15/03/2018: change the code to have individuals marked in each year 
+# F. Barraquand 25/07/2018: change to formulation with predation on prey juveniles & non-zero top-down effect
+# O. Gimenez 26/07/2018: add productivity likelihood component
+# F. Barraquand 31/07/2018: add informative priors and investigated scaling (/100) on all DD relationships
+# O. Gimenez 02/08/2018: removed scaling and tweaked the prior on alpha a little
+# O. Gimenez 03/08/2018: got rid of the measurement error in the count model by using very small 
+# 						 values for the variance of the obs error, got rid of informative priors, 
+# 						 and cleaned up comments
+
+# MODEL:
+# Consider 2 species with age-structured demography 
+# 2 age-classes, Besbeas et al 2003 formulation
+
+# with matrix pop model for predator: [                0, phi^J_t(predator) * f^A(prey),
+#                                      phi^J_t(predator),             phi^A_t(predator)]
+
+# and matrix pop model for prey: [                        0, phi^J_t(predator) * f^A(prey),
+#                                             phi^A_t(prey),             	 phi^A_t(prey)]
+
+# DENSITY-DEPENDENCE (DD) RELATIONSHIPS (time is implicit in notation)
+
+# Inter-DD
+# logit(phi^J_V) = beta_0 + beta_1 * N^A_P 	# effect of adult predator on juvenile prey survival
+# log(f_P) = eta_0 + eta_1 * N^J_V   		# effect of juvenile prey on the fecundity of the predator
+
+# Intra-DD
+# log(f_V) = eta_0 + eta_1 * N^A_V 			# effect of prey on prey fecundity
+# logit(phi^J_P) = beta_0 + beta_1 * N^A_P 	# effect of adult predator on juvenile predator survival
+
+############################################################################################
+######################################## SIMULATION ########################################
+############################################################################################
+
+# simulations are performed in Jags 
+# (yes, that's possible, check out https://oliviergimenez.github.io/post/sim_with_jags/)
+
+# load packages
+library(R2jags)
+library(mcmcplots)
+
+rm(list=ls())
+
+#### Parameters (for comparison purposes) 
+
+# number of survey occasions (same for predator/prey, could be changed though)
+n.occasions <- 30
+
+# parameters for predator; for simplicity, all individuals are marked as young 
+# and released at each sampling occasion (but the last one)
+nindj <- 20 # nb of individuals marked as young per year
+fj <- as.numeric(gl(n.occasions-1,nindj))
+fP <- fj
+nindP <- length(fP)
+
+# create matrices X indicating age classes
+xj <- matrix(NA, ncol = n.occasions-1, nrow = nindP)
+for (i in 1: nindP){
+   for (t in fj[i]:(n.occasions-1)){
+   	  #if (fj[i]>(n.occasions-1)) next
+      xj[i,t] <- 2
+      xj[i,fj[i]] <- 1   
+      } #t
+   } #i
+xP <- xj
+
+# demog parameters
+mean.pP <- 0.7 # detection is the same for youngs and adults
+mean.sadP <- 0.7 # constant adult survival
+sigma.y <- 0.001 # basically no observation error
+tauyP <- 1/(sigma.y*sigma.y)
+
+# init abundance
+N1initP <- 20
+NadinitP <- 20
+
+# annual number of surveyed broods 
+RP <- rep(20,n.occasions-1)
+
+# parameters for prey; for simplicity, all individuals are marked as young 
+# and released at each sampling occasion (but the last one)
+nindj <- 20 # nb of individuals marked as young per year
+fj <- as.numeric(gl(n.occasions-1,nindj))
+fV <- fj
+nindV <- length(fV)
+
+# create matrices X indicating age classes
+xj <- matrix(NA, ncol = n.occasions-1, nrow = nindV)
+for (i in 1: nindP){
+   for (t in fj[i]:(n.occasions-1)){
+   	  #if (fj[i]>(n.occasions-1)) next
+      xj[i,t] <- 2
+      xj[i,fj[i]] <- 1   
+      } #t
+   } #i
+xV <- xj
+
+# demo parameters
+mean.pV <- 0.7 # detection is the same for youngs and adults
+mean.sadV <- 0.6 # constant adult survival ##previously juvenile
+sigma.y <- 0.001 # observation error
+tauyV <- 1/(sigma.y*sigma.y)
+
+# init abundance
+N1initV <- 100
+NadinitV <- 100
+
+# annual number of surveyed broods 
+RV <- rep(50,n.occasions-1)
+
+# Specify parameters for DD relationships
+# Plot relationships to check they're biologically relevant
+
+alpha <- rep(NA,8)
+N <- seq(10,500,length=n.occasions)
+
+# intra-species DD - juvenile predator survival fn of adult predator abundance
+alpha[1] <- 0.5
+alpha[2] <- -0.01 # slopes
+1/(1+exp(-(alpha[1] + alpha[2] * N)))
+
+# inter-species DD - juvenile prey survival fn of adult predator abundance
+alpha[3] <- 0.5
+alpha[4] <- -0.025 # slopes
+1/(1+exp(-(alpha[3] + alpha[4] * N)))
+
+# inter-species DD - predator fecundity fn of juvenile prey abundance
+alpha[5] <- 0
+alpha[6] <- 0.004 # slopes
+exp(alpha[5] + alpha[6] * N)
+# if juv prey gets above 500 we have a problem, otherwise OK
+
+# intra-species DD - prey fecundity fn of adult prey abundance
+alpha[7] <- 2 #1.5 #2.5 too much
+alpha[8] <- -0.005 # slopes
+exp(alpha[7] + alpha[8] * N)
+
+############################################################################################
+######################################## ESTIMATION ########################################
+############################################################################################
+
+# specify model
+sink("ipm-prod_2species.jags")
+cat("
+model {
+#-------------------------------------------------
+#  2-species integrated population model (Besbeas et al. formulation)
+#  - Age structured model with 2 age classes: 
+#		1-year old and adult (at least 2 years old)
+#  - Age at first breeding = 1 year
+#  - Prebreeding census, female-based
+#  - All vital rates assumed to be constant, except when intra/inter DD
+#  - N is for prey, P is for predator
+# INTER DENSITY DEPENDENCE
+# logit(phi^A_V) = beta_0 + beta_1 * N^A_P
+# log(f_P) = eta_0 + eta_1 * N^J_V
+# INTRA DENSITY DEPENDENCE
+# log(f_V) = eta_0 + eta_1 * N^A_V
+# logit(phi^J_P) = beta_0 + beta_1 * N^A_P
+# Note: We use huge precision = tiny variance 
+# 		and neglect obs error
+#-------------------------------------------------
+
+#-------------------------------------------------
+# 1. Define the priors for the parameters
+#-------------------------------------------------
+
+# Initial population sizes
+n1P ~ dnorm(25, 100000)T(0,)     # 1-year predators
+nadP ~ dnorm(25, 100000)T(0,)    # adult predators
+N1P[1] <- round(n1P)
+NadP[1] <- round(nadP)
+n1V ~ dnorm(25, 100000)T(0,)     # 1-year preys
+nadV ~ dnorm(25, 100000)T(0,)    # adult preys
+N1V[1] <- round(n1V)
+NadV[1] <- round(nadV)
+
+# Survival and recapture probabilities, as well as productivity
+for (i in 1:nindP){
+   for (t in fP[i]:(nyears-1)){
+      phiP[i,t] <- betaP[xP[i,t],t]
+      pP[i,t] <- mean.pP # constant predator detection
+      } #t
+   } #i
+for (t in 1:(nyears-1)){
+	logit(betaP[1,t]) <- alpha[1] + alpha[2] * NadP[t] # intra-species DD - juvenile predator survival fn of adult predator abundance	
+	betaP[2,t] <- mean.sadP # constant adult predator survival
+} #t
+
+for (i in 1:nindV){
+   for (t in fV[i]:(nyears-1)){
+      phiV[i,t] <- betaV[xV[i,t],t]
+      pV[i,t] <- mean.pV # constant prey detection
+      } #t
+   } #i
+for (t in 1:(nyears-1)){
+	logit(betaV[1,t]) <- alpha[3] + alpha[4] * NadP[t] # fn of adult predator abundance, previously mean.sjuvV, constant juvenile prey survival
+  betaV[2,t] <- mean.sadV #constant adult prey survival 
+} #t
+
+mean.sadV ~ dunif(0, 1) # prior for juvenile prey survival -- info prior
+mean.sadP ~ dunif(0, 1) # prior for adult predator survival
+mean.pP ~ dunif(0,1) # prior for mean recapture 
+mean.pV ~ dunif(0,1) # prior for mean recapture
+for (t in 1:(nyears-1)){
+   sjuvP[t] <- betaP[1,t] # juvenile predator survival
+   sadP[t] <- betaP[2,t] # adult predator survival
+   log(fecP[t]) <- alpha[5] + alpha[6] * N1V[t] # inter-species DD - predator fecundity fn of juvenile prey abundance
+   sjuvV[t] <- betaV[1,t] # juvenile prey survival
+   sadV[t] <- betaV[2,t] # adult prey survival
+   log(fecV[t]) <- alpha[7] + alpha[8] * NadV[t] # intra-species DD - prey fecundity fn of adult prey abundance
+   }
+
+for (j in 1:8){
+	alpha[j] ~ dnorm(0,1) # priors on density-dependence parameters
+}
+
+#-------------------------------------------------
+# 2. The likelihoods of the isolated data sets
+#-------------------------------------------------
+# 2.1. Likelihood for population population count data (state-space model)
+# 2.1.1 System process
+for (t in 2:nyears){
+	mean1P[t] <- fecP[t-1] / 2 * sjuvP[t-1] * NadP[t-1]
+	N1P[t] ~ dpois(mean1P[t])
+	NadP[t] ~ dbin(sadP[t-1], NtotP[t-1])
+	mean1V[t] <- fecV[t-1] / 2 * sjuvV[t-1] * NadV[t-1]
+	N1V[t] ~ dpois(mean1V[t])
+	NadV[t] ~ dbin(sadV[t-1], NtotV[t-1])
+}
+for (t in 1:nyears){
+	NtotP[t] <- NadP[t] + N1P[t] # total predator abundance
+	NtotV[t] <- NadV[t] + N1V[t] # total prey abundance
+}
+# 2.1.2 Observation process
+for (t in 1:nyears){
+countsP[t] ~ dnorm(NtotP[t], 100000)
+countsV[t] ~ dnorm(NtotV[t], 100000)
+}
+
+# 2.2 Likelihood for capture-recapture data: CJS model (2 age classes)
+# State-space modelling formulation
+
+# predator
+for (i in 1:nindP){
+	# Define latent state at first capture
+	zP[i,fP[i]] <- 1
+	for (t in (fP[i]+1): nyears){
+		# State process
+		zP[i,t] ~ dbern(mu1P[i,t])
+		mu1P[i,t] <- phiP[i,t-1] * zP[i,t-1]
+		# Observation process
+		chP[i,t] ~ dbern(mu2P[i,t])
+		mu2P[i,t] <- pP[i,t-1] * zP[i,t]
+	} #t
+} #i
+
+# prey
+for (i in 1:nindV){
+	# Define latent state at first capture
+	zV[i,fV[i]] <- 1
+	for (t in (fV[i]+1): nyears){
+		# State process
+		zV[i,t] ~ dbern(mu1V[i,t])
+		mu1V[i,t] <- phiV[i,t-1] * zV[i,t-1]
+		# Observation process
+		chV[i,t] ~ dbern(mu2V[i,t])
+		mu2V[i,t] <- pV[i,t-1] * zV[i,t]
+	} #t
+} #i
+
+# 2.3 Likelihood for productivity data: Poisson regression
+# total number of nestlings counted in year t (J) is a Poisson
+# with rate = product of nb of surveyed broods (R) and productivity (f)
+for(t in 1:(nyears-1)){
+	JP[t] ~ dpois(rhoP[t]) # predator prod
+	# JV[t] ~ dpois(rhoV[t]) # prey prod
+	rhoP[t] <- RP[t] * fecP[t]
+	# rhoV[t] <- RV[t] * fecV[t]
+}
+
+}
+",fill = TRUE)
+sink()
+
+# build list of data to be passed in jags (use info for capture-recapture models, see Kery and Schaub book)
+known.state.cjs <- function(ch){
+   state <- ch
+   for (i in 1:dim(ch)[1]){
+      n1 <- min(which(ch[i,]==1))
+      n2 <- max(which(ch[i,]==1))
+      state[i,n1:n2] <- 1
+      state[i,n1] <- NA
+      }
+   state[state==0] <- NA
+   return(state)
+   }
+
+
+
+### Loop on simulations
+
+nsims <- 100
+
+# specify which parameters we'd like to monitor
+parameters <- c("mean.pP", "N1P", "NadP", "NtotP","alpha", "mean.pV", "N1V", "NadV", "NtotV")
+
+# MCMC settings
+ni <- 20000
+nb <- 10000
+nc <- 2
+
+for (sim in 1:nsims){
+
+# Load data
+
+load(paste("../0_simulation/sim_data/SimulationIPM_",sim,".RData",sep=""))
+str(jags.data.out)
+jags.data = jags.data.out
+jags.data$RV<-NULL
+jags.data$JV<-NULL
+str(jags.data)
+
+# specify initial values: we assigned the values we used to simulated data as initial values, 
+# other parameters (latent states in particular) are assigned initial values by Jags 
+inits <- function(){list(
+mean.pP = mean.pP, n1P = N1initP, nadP = NadinitP, mean.sadP = mean.sadP, 
+mean.sadV = mean.sadV, mean.pV = mean.pV, n1V = N1initV, nadV = NadinitV,
+alpha = alpha)}  
+### do we want to change this? e.g.
+#inits <- function(){list(mean.pP = runif(1, 0, 1),n1P = rpois(1, 30), nadP = rpois(1, 30), sigma.yP = runif(1,0, 10),mean.sadP = runif(1, 0, 1),mean.sjuvV = runif(1, 0, 1),mean.pV = runif(1, 0, 1), n1V = rpois(1, 30), nadV = rpois(1, 30), sigma.yV = runif(1, 0, 10),alpha = rnorm(8, 0, 1))}  
+
+# run jags
+while(TRUE){
+    ipm.fit <- try(jags(jags.data, inits, parameters, "ipm-prod_2species.jags", n.chains = nc, n.iter = ni, n.burnin = nb, working.directory = getwd()), silent=TRUE)
+    if(!is(ipm.fit, 'try-error')) break
+    }
+
+# summarize posteriors
+print(ipm.fit, digits = 2)
+
+# traceplots
+traplot(ipm.fit,c("mean.pP", "alpha", "mean.pV"))
+
+# posterior densities
+denplot(ipm.fit,c("mean.pP", "alpha", "mean.pV"))
+
+# compare actual vs estimated abundance
+
+par(mfrow=c(1,2))
+# real vs estimated predator abundance
+plot(1:n.occasions,jags.data$countsP,type='l',lwd=3,col='blue',ylim=c(0,max(jags.data$countsP)),ylab='counts',xlab='years',main='predator')
+lines(1:n.occasions, ipm.fit$BUGSoutput$mean$NtotP,type='l',lwd=3,col='green')
+legend('bottomright',col=c('blue','green'),legend=c('truth','estimated'),lty=1,lwd=3)
+
+# real vs estimated prey abundance
+plot(1:n.occasions,jags.data$countsV,type='l',lwd=3,col='blue',ylim=c(0,max(jags.data$countsV)),ylab='counts',xlab='years',main='prey')
+lines(1:n.occasions, ipm.fit$BUGSoutput$mean$NtotV,type='l',lwd=3,col='green')
+legend('bottomright',col=c('blue','green'),legend=c('truth','estimated'),lty=1,lwd=3)
+
+# real vs estimated parameters involved in DD relationships 
+alpha_est <- ipm.fit$BUGSoutput$mean$alpha
+data.frame(real=alpha,estimated=alpha_est )
+
+# plot DD relationships (actual and estimated)
+N <- seq(10,500,length=n.occasions) #density index
+
+# intra-species DD - juvenile predator survival fn of adult predator abundance
+surv_juvP_intrasp = 1/(1+exp(-(alpha[1] + alpha[2] * N)))
+surv_juvP_intrasp_est = 1/(1+exp(-(alpha_est[1] + alpha_est[2] * N)))
+
+# inter-species DD - juvenile prey survival fn of adult predator abundance
+surv_juvV_intersp = 1/(1+exp(-(alpha[3] + alpha[4] * N)))
+surv_juvV_intersp_est = 1/(1+exp(-(alpha_est[3] + alpha_est[4] * N)))
+
+# inter-species DD - predator fecundity fn of juvenile prey abundance
+fecP_intersp = exp(alpha[5] + alpha[6] * N)
+fecP_intersp_est = exp(alpha_est[5] + alpha_est[6] * N)
+
+# intra-species DD - prey fecundity fn of adult prey abundance
+fecV_intrasp =exp(alpha[7] + alpha[8] * N)
+fecV_intrasp_est =exp(alpha_est[7] + alpha_est[8] * N)
+
+par(mfrow=c(2,2))
+
+plot(N,surv_juvP_intrasp,type='l',lwd=3,col='blue',ylab='Juvenile P survival',ylim=c(0,1),xlab='P abundance',main='INTRA-DD\n juv pred surv vs pred abund')
+lines(N,surv_juvP_intrasp_est,type='l',lwd=3,col='green')
+legend('topright',col=c('blue','green'),legend=c('actual','estimated'),lty=1,lwd=3)
+
+plot(N,surv_juvV_intersp,type='l',lwd=3,col='blue',ylab='Juvenile V survival',ylim=c(0,1),xlab='P abundance',main='INTER-DD\n juv prey surv vs pred abund')
+lines(N,surv_juvV_intersp_est,type='l',lwd=3,col='green')
+legend('topright',col=c('blue','green'),legend=c('actual','estimated'),lty=1,lwd=3)
+
+plot(N,fecP_intersp,type='l',lwd=3,col='blue',ylab='P fecundity',ylim=c(0,10),xlab=' Juv V abundance',main='INTER-DD\n pred fec vs juv prey abund')
+lines(N,fecP_intersp_est,type='l',lwd=3,col='green')
+legend('topright',col=c('blue','green'),legend=c('actual','estimated'),lty=1,lwd=3)
+
+plot(N,fecV_intrasp,type='l',lwd=3,col='blue',ylab='V fecundity',ylim=c(0,10),xlab='Adult V abundance',main='INTRA-DD\n prey fec vs ad prey abund')
+lines(N,fecV_intrasp_est,type='l',lwd=3,col='green')
+legend('topright',col=c('blue','green'),legend=c('actual','estimated'),lty=1,lwd=3)
+
+save(ipm.fit,file=paste("fitted/EstimIPM_",sim,".RData",sep=""))
+
+}
