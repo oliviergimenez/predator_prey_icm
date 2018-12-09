@@ -59,7 +59,7 @@ return(VR)
 set.seed(42) 
 
 # Define parameters
-tmax = 500 #max time for sim
+tmax = 100 #500 #max time for sim
 
 ### Max rate parameters
 # Prey (max) adult survival (v for victim)
@@ -113,13 +113,13 @@ matlines(t(N[,1:tmax]))
 ############################################ end of simulation ##################################################################
 
 pdf(file="TimePlot_BGpredation_prebreed.pdf",width=12,height=8)
-par(cex=1.2)
-matplot(t(N[,1:tmax]),xlab="Time",ylab="Densities")
-matlines(t(N[,1:tmax]),lwd=2)
+par(cex=1.5)
+matplot(t(N[,1:tmax]),xlab="Time",ylab="Densities",pch=c(15,16,17,19))
+matlines(t(N[,1:tmax]),lwd=2,lty=c(1,2,3,4))
 dev.off()
 
 pdf(file="Log_TimePlot_BGpredation_prebreed.pdf",width=12,height=8)
-par(cex=1.2)
-matplot(t(log(N[,1:tmax])),xlab="Time",ylab="Densities")
-matlines(t(log(N[,1:tmax])),lwd=2)
+par(cex=1.5)
+matplot(t(log(N[,1:tmax])),xlab="Time",ylab="Densities",pch=c(15,16,17,19))
+matlines(t(log(N[,1:tmax])),lwd=2,lty=c(1,2,3,4))
 dev.off()

@@ -119,16 +119,17 @@ nplotstart = 100
 nplotend = 200 #tmax
 
 pdf(file="TimePlot_BGpredation_prebreed_stochastic_highfec.pdf",width=12,height=8)
-par(cex=1.2)
-matplot(t(N[,nplotstart:nplotend]),xlab="Time",ylab="Densities")
-matlines(t(N[,nplotstart:nplotend]),lwd=2)
+par(cex=1.5)
+matplot(t(N[,nplotstart:nplotend]),xlab="Time",ylab="Densities",pch=c(15,16,17,19))
+matlines(t(N[,nplotstart:nplotend]),lwd=2,lty=c(1,2,3,4))
 dev.off()
 
 pdf(file="Log_TimePlot_BGpredation_prebreed_stochastic_highfec_log.pdf",width=12,height=8)
-par(cex=1.2)
-matplot(t(log(N[,nplotstart:nplotend])),xlab="Time",ylab="log(Densities)")
-matlines(t(log(N[,nplotstart:nplotend])),lwd=2)
+par(cex=1.5)
+matplot(t(log(N[,nplotstart:nplotend])),xlab="Time",ylab="Densities",pch=c(15,16,17,19))
+matlines(t(log(N[,nplotstart:nplotend])),lwd=2,lty=c(1,2,3,4))
 dev.off()
+
 
 
 
